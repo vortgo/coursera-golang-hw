@@ -7,19 +7,54 @@ import (
 	"sync"
 )
 
+func asyncDataSignerCrc32(data string, out chan string, wg *sync.WaitGroup) {
+	defer func() {
+		wg.Done()
+	}()
+	out <- DataSignerCrc32(data)
+}
+
 func SingleHash(in, out chan interface{}) {
 	for inputVal := range in {
 		data := strconv.Itoa(inputVal.(int))
-		out <- DataSignerCrc32(data) + "~" + DataSignerCrc32(DataSignerMd5(data))
+		wg := &sync.WaitGroup{}
+
+		outCrc32FirstPart := make(chan string)
+		wg.Add(1)
+		go asyncDataSignerCrc32(data, outCrc32FirstPart, wg)
+
+		outCrc32SecondPart := make(chan string)
+		wg.Add(1)
+		go asyncDataSignerCrc32(DataSignerMd5(data), outCrc32SecondPart, wg)
+
+		wg.Wait()
+
+		firstPart := <-outCrc32FirstPart
+		secondPart := <-outCrc32SecondPart
+
+		out <- firstPart + "~" + secondPart
 	}
 }
 
 func MultiHash(in, out chan interface{}) {
 	for inputVal := range in {
+		// TODO: все что внутри в цикла можно вынести в горутины
 		var result string
+		outCrc32 := make(chan string, 6)
+		wg := &sync.WaitGroup{}
+
 		for i := 0; i < 6; i++ {
-			result += DataSignerCrc32(strconv.Itoa(i) + inputVal.(string))
+			wg.Add(1)
+			go asyncDataSignerCrc32(strconv.Itoa(i)+inputVal.(string), outCrc32, wg)
 		}
+
+		wg.Wait()
+		close(outCrc32)
+		//TODO: тут нужно сортировать то что пришло из канала
+		for val := range outCrc32 {
+			result += val
+		}
+
 		out <- result
 	}
 }
